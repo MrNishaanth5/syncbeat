@@ -1,0 +1,49 @@
+name: syncbeat
+description: Synchronized multi-device music listening app
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # Audio
+  just_audio: ^0.9.36
+  audio_session: ^0.1.18
+  
+  # Networking
+  web_socket_channel: ^2.4.0
+  http: ^1.1.0
+  
+  # Bluetooth
+  flutter_blue_plus: ^1.31.0
+  
+  # State Management
+  flutter_riverpod: ^2.4.9
+  
+  # Storage
+  shared_preferences: ^2.2.2
+  path_provider: ^2.1.1
+  
+  # File picking
+  file_picker: ^6.1.1
+  
+  # Utils
+  uuid: ^4.2.1
+  crypto: ^3.0.3
+  permission_handler: ^11.1.0
+  
+  cupertino_icons: ^1.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
