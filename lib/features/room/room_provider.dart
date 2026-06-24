@@ -3,9 +3,9 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
-import '../core/sync_engine.dart';
-import '../core/audio_controller.dart';
-import '../core/websocket_client.dart';
+import '../../core/sync_engine.dart';
+import '../../core/audio_controller.dart';
+import '../../core/websocket_client.dart';
 
 // ---- Config ----
 // Replace with your deployed backend URL or use local server
