@@ -9,11 +9,11 @@ import '../../core/websocket_client.dart';
 
 // ---- Config ----
 // Replace with your deployed backend URL or use local server
-const String kServerBaseUrl = 'https://your-server.com'; // HTTP
-const String kServerWsUrl  = 'wss://your-server.com';    // WebSocket
+const String kServerBaseUrl = 'https://syncbeat-server-production-9ccc.up.railway.app';
+const String kServerWsUrl  = 'wss://syncbeat-server-production-9ccc.up.railway.app';
 
 // For LOCAL DEMO mode (no server needed), set this to true
-const bool kDemoMode = true;
+const bool kDemoMode = false;
 
 // ---- Models ----
 enum RoomStatus { idle, creating, joining, connected, error }
