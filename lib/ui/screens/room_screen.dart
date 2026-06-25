@@ -2,12 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:just_audio/just_audio.dart';
 import 'package:path/path.dart' as p;
 import '../../features/room/room_provider.dart';
 import '../../core/audio_controller.dart';
 import '../theme.dart';
 import 'home_screen.dart';
+
+const int _kMaxPlaylistBytes = kMaxPlaylistBytes;
 
 class RoomScreen extends ConsumerStatefulWidget {
   const RoomScreen({super.key});
@@ -40,23 +41,62 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
     return '$m:$s';
   }
 
-  Future<void> _pickFile() async {
+  String _fmtBytes(int bytes) => '${(bytes / 1024 / 1024).toStringAsFixed(1)}MB';
+
+  /// Opens multi-select picker, checks total size against the limit,
+  /// and either starts a fresh playlist or appends to the running one.
+  Future<void> _pickPlaylist({required bool append}) async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.audio,
-      allowMultiple: false,
+      allowMultiple: true,
     );
     if (result == null || result.files.isEmpty) return;
-    final file = result.files.first;
-    if (file.path == null) return;
 
-    final track = TrackInfo(
-      id: file.name,
-      title: p.basenameWithoutExtension(file.name),
-      artist: 'Local File',
-      sourceType: AudioSourceType.localFile,
-      sourcePath: file.path!,
-    );
-    await ref.read(roomProvider.notifier).loadTrack(track);
+    int totalBytes = 0;
+    final tracks = <TrackInfo>[];
+    for (final f in result.files) {
+      if (f.path == null) continue;
+      totalBytes += f.size;
+      tracks.add(TrackInfo(
+        id: f.name,
+        title: p.basenameWithoutExtension(f.name),
+        artist: 'Local File',
+        sourceType: AudioSourceType.localFile,
+        sourcePath: f.path!,
+      ));
+    }
+
+    if (totalBytes > _kMaxPlaylistBytes) {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: AppTheme.card,
+          title: const Text('Playlist too large', style: TextStyle(color: AppTheme.textPrimary)),
+          content: Text(
+            'Selected songs total ${_fmtBytes(totalBytes)}, which is over the ${_fmtBytes(_kMaxPlaylistBytes)} limit. '
+            'Please pick fewer or smaller songs.',
+            style: const TextStyle(color: AppTheme.textSecondary),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK', style: TextStyle(color: AppTheme.cyan))),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final notifier = ref.read(roomProvider.notifier);
+    if (append) {
+      notifier.addToPlaylist(tracks);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Added ${tracks.length} song(s) to queue'), backgroundColor: AppTheme.card),
+      );
+    } else {
+      notifier.setLocalPlaylist(tracks);
+      await notifier.startPlaylist();
+    }
   }
 
   @override
@@ -66,7 +106,8 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
     final isHost = room.isHost;
     final track = room.currentTrack;
     final isPlaying = room.playbackState == PlaybackState.playing;
-    final isLoading = room.playbackState == PlaybackState.loading;
+    final isLoading = room.playbackState == PlaybackState.loading || room.isPreparingNext;
+    final queue = room.queueInfo;
 
     return Scaffold(
       body: SafeArea(
@@ -89,18 +130,13 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'ROOM  ${room.roomCode ?? ''}',
-                          style: const TextStyle(color: AppTheme.cyan, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 2),
-                        ),
-                        Text(
-                          isHost ? 'You are the host' : 'Listening along',
-                          style: const TextStyle(color: AppTheme.textMuted, fontSize: 11),
-                        ),
+                        Text('ROOM  ${room.roomCode ?? ''}',
+                          style: const TextStyle(color: AppTheme.cyan, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 2)),
+                        Text(isHost ? 'You are the host' : 'Listening along',
+                          style: const TextStyle(color: AppTheme.textMuted, fontSize: 11)),
                       ],
                     ),
                   ),
-                  // Copy code
                   GestureDetector(
                     onTap: () {
                       Clipboard.setData(ClipboardData(text: room.roomCode ?? ''));
@@ -110,17 +146,12 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
                     },
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: AppTheme.card, borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: AppTheme.border),
-                      ),
-                      child: const Row(
-                        children: [
-                          Icon(Icons.copy, color: AppTheme.textSecondary, size: 14),
-                          SizedBox(width: 4),
-                          Text('Copy Code', style: TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
-                        ],
-                      ),
+                      decoration: BoxDecoration(color: AppTheme.card, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+                      child: const Row(children: [
+                        Icon(Icons.copy, color: AppTheme.textSecondary, size: 14),
+                        SizedBox(width: 4),
+                        Text('Copy Code', style: TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
+                      ]),
                     ),
                   ),
                 ],
@@ -138,19 +169,18 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
             ),
 
             const SizedBox(height: 8),
-            Divider(color: AppTheme.border, height: 1),
+            const Divider(color: AppTheme.border, height: 1),
 
-            // Album art area
             Expanded(
               child: Padding(
-                padding: const EdgeInsets.all(32),
+                padding: const EdgeInsets.all(28),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    // Art placeholder
+                    // Art
                     Container(
-                      width: 200,
-                      height: 200,
+                      width: 180,
+                      height: 180,
                       decoration: BoxDecoration(
                         color: AppTheme.card,
                         borderRadius: BorderRadius.circular(20),
@@ -163,38 +193,38 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
                         ? Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.music_note, color: AppTheme.cyan, size: 56),
+                              Icon(isLoading ? Icons.cloud_upload_outlined : Icons.music_note, color: AppTheme.cyan, size: 48),
                               const SizedBox(height: 8),
                               Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 12),
-                                child: Text(
-                                  track.title,
-                                  textAlign: TextAlign.center,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.bold),
-                                ),
+                                child: Text(track.title, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13, fontWeight: FontWeight.bold)),
                               ),
-                              const SizedBox(height: 4),
-                              Text(track.artist, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
                             ],
                           )
                         : Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.queue_music, color: AppTheme.textMuted, size: 48),
+                              Icon(Icons.queue_music, color: AppTheme.textMuted, size: 44),
                               const SizedBox(height: 8),
-                              Text(
-                                isHost ? 'Pick a song below' : 'Waiting for host...',
-                                style: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
-                              ),
+                              Text(isHost ? 'Pick songs below' : 'Waiting for host...',
+                                style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
                             ],
                           ),
                     ),
 
-                    const SizedBox(height: 36),
+                    const SizedBox(height: 12),
 
-                    // Seek bar
+                    // Queue position indicator
+                    if (queue.total > 0)
+                      Text(
+                        'Track ${queue.currentIndex + 1} of ${queue.total}'
+                        '${queue.nextTitle != null ? "  ·  Up next: ${queue.nextTitle}" : ""}',
+                        style: const TextStyle(color: AppTheme.textMuted, fontSize: 11),
+                      ),
+
+                    const SizedBox(height: 28),
+
                     if (track != null) ...[
                       SliderTheme(
                         data: SliderThemeData(
@@ -207,31 +237,23 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
                           overlayColor: AppTheme.cyan.withOpacity(0.2),
                         ),
                         child: Slider(
-                          value: _duration.inMilliseconds > 0
-                            ? (_position.inMilliseconds / _duration.inMilliseconds).clamp(0.0, 1.0)
-                            : 0.0,
+                          value: _duration.inMilliseconds > 0 ? (_position.inMilliseconds / _duration.inMilliseconds).clamp(0.0, 1.0) : 0.0,
                           onChangeStart: isHost ? (_) => setState(() => _dragging = true) : null,
                           onChangeEnd: isHost ? (v) {
                             setState(() => _dragging = false);
-                            final seekMs = (v * _duration.inMilliseconds).toInt();
-                            notifier.seek(seekMs);
+                            notifier.seek((v * _duration.inMilliseconds).toInt());
                           } : null,
-                          onChanged: isHost ? (v) {
-                            setState(() => _position = Duration(milliseconds: (v * _duration.inMilliseconds).toInt()));
-                          } : null,
+                          onChanged: isHost ? (v) => setState(() => _position = Duration(milliseconds: (v * _duration.inMilliseconds).toInt())) : null,
                         ),
                       ),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(_fmt(_position), style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
-                            Text(_fmt(_duration), style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
-                          ],
-                        ),
+                        child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                          Text(_fmt(_position), style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
+                          Text(_fmt(_duration), style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
+                        ]),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                     ],
 
                     // Controls
@@ -239,62 +261,49 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         if (isHost) ...[
-                          // Pick file
-                          _ControlBtn(
-                            icon: Icons.folder_open,
-                            color: AppTheme.textSecondary,
-                            size: 24,
-                            onTap: _pickFile,
-                          ),
-                          const SizedBox(width: 20),
+                          _ControlBtn(icon: Icons.library_music, color: AppTheme.textSecondary, size: 22,
+                            onTap: () => _pickPlaylist(append: false)),
+                          const SizedBox(width: 16),
                         ],
-
-                        // Play/Pause
                         GestureDetector(
-                          onTap: isHost
-                            ? () => isPlaying ? notifier.pause() : notifier.play()
-                            : null,
+                          onTap: isHost ? () => isPlaying ? notifier.pause() : notifier.play() : null,
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 200),
-                            width: 70,
-                            height: 70,
+                            width: 64, height: 64,
                             decoration: BoxDecoration(
                               color: isHost ? AppTheme.cyan : AppTheme.textMuted.withOpacity(0.3),
                               shape: BoxShape.circle,
                               boxShadow: isHost ? [BoxShadow(color: AppTheme.cyan.withOpacity(0.4), blurRadius: 20)] : null,
                             ),
                             child: isLoading
-                              ? const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2)))
-                              : Icon(isPlaying ? Icons.pause : Icons.play_arrow, color: Colors.black, size: 34),
+                              ? const Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2)))
+                              : Icon(isPlaying ? Icons.pause : Icons.play_arrow, color: Colors.black, size: 30),
                           ),
                         ),
-
                         if (isHost) ...[
-                          const SizedBox(width: 20),
-                          _ControlBtn(
-                            icon: Icons.replay_10,
-                            color: AppTheme.textSecondary,
-                            size: 24,
-                            onTap: () => notifier.seek((_position.inMilliseconds - 10000).clamp(0, _duration.inMilliseconds)),
-                          ),
+                          const SizedBox(width: 16),
+                          _ControlBtn(icon: Icons.playlist_add, color: AppTheme.textSecondary, size: 22,
+                            onTap: () => _pickPlaylist(append: true)),
                         ],
                       ],
                     ),
 
-                    if (!isHost)
+                    if (isHost && room.queueInfo.total > 0)
                       Padding(
-                        padding: const EdgeInsets.only(top: 16),
-                        child: Text(
-                          'Only the host can control playback',
-                          style: const TextStyle(color: AppTheme.textMuted, fontSize: 11),
-                        ),
+                        padding: const EdgeInsets.only(top: 10),
+                        child: Text('Tap + to add more songs to the queue', style: const TextStyle(color: AppTheme.textMuted, fontSize: 10)),
+                      ),
+
+                    if (!isHost)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 14),
+                        child: Text('Only the host can control playback', style: TextStyle(color: AppTheme.textMuted, fontSize: 11)),
                       ),
                   ],
                 ),
               ),
             ),
 
-            // Sync indicator
             _SyncBar(clockOffset: room.clockOffsetMs),
             const SizedBox(height: 16),
           ],
@@ -317,14 +326,11 @@ class _MemberChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: member.isHost ? AppTheme.cyan.withOpacity(0.5) : AppTheme.border),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(member.isHost ? Icons.star : Icons.person, color: member.isHost ? AppTheme.cyan : AppTheme.textSecondary, size: 13),
-          const SizedBox(width: 5),
-          Text(member.displayName, style: TextStyle(color: member.isHost ? AppTheme.cyan : AppTheme.textSecondary, fontSize: 12)),
-        ],
-      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(member.isHost ? Icons.star : Icons.person, color: member.isHost ? AppTheme.cyan : AppTheme.textSecondary, size: 13),
+        const SizedBox(width: 5),
+        Text(member.displayName, style: TextStyle(color: member.isHost ? AppTheme.cyan : AppTheme.textSecondary, fontSize: 12)),
+      ]),
     );
   }
 }
@@ -356,22 +362,12 @@ class _SyncBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withOpacity(0.3)),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.sync, color: color, size: 14),
-            const SizedBox(width: 6),
-            Text(
-              'Clock offset: ${clockOffset}ms  ·  Demo mode (no server)',
-              style: TextStyle(color: color, fontSize: 11),
-            ),
-          ],
-        ),
+        decoration: BoxDecoration(color: color.withOpacity(0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: color.withOpacity(0.3))),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(Icons.sync, color: color, size: 14),
+          const SizedBox(width: 6),
+          Text('Clock offset: ${clockOffset}ms', style: TextStyle(color: color, fontSize: 11)),
+        ]),
       ),
     );
   }
