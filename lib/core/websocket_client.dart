@@ -5,7 +5,7 @@ import 'package:web_socket_channel/status.dart' as status;
 
 enum WsMessageType {
   play, pause, seek, clockSync, clockSyncReply,
-  memberJoined, memberLeft, roomState, trackLoaded, error
+  memberJoined, memberLeft, roomState, trackLoaded, queueUpdate, error
 }
 
 class WsMessage {
@@ -64,6 +64,7 @@ class WebSocketClient {
       case 'MEMBER_LEFT': return WsMessageType.memberLeft;
       case 'ROOM_STATE': return WsMessageType.roomState;
       case 'TRACK_LOADED': return WsMessageType.trackLoaded;
+      case 'QUEUE_UPDATE': return WsMessageType.queueUpdate;
       case 'ERROR': return WsMessageType.error;
       default: return null;
     }
